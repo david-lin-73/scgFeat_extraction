@@ -1,3 +1,3 @@
 # scgFeat_extraction
 
-# sortPeaks.m is the main function
+### sortPeaks.m is the main function
