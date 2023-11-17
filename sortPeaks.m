@@ -1,4 +1,4 @@
-function [sortedPeaks, varargout] = sortPeaks(scg_beats, fs, varargin)
+function [sortedPeaks, varargout] = sortPeaks(scg_beats, fs, options)
 % Function
 % Let default be the  
 % Input (required)
@@ -46,122 +46,49 @@ function [sortedPeaks, varargout] = sortPeaks(scg_beats, fs, varargin)
 % locs = sortPeaks(sepbeats_cln, fs, 'NClusters', 4, 'AXRange', [1, 250], 'Influence', 1/1000);
 %srtpeakstoc = toc
 
-% set the default arguments 
-options = struct('model', 0, ...        % default model provided
-    'dijkstra', 1, ...                  % default using dijkstra  
-    'nclusters', 4, ...                 % default num clusters 
-    'ndim', 1, ... 
-    'dijkthresh', 0.1, ...              % threshold to consider for nodes 
-    'training', 0, ...                  % training data provided 
-    'ncand', 10, ...                    % number of candidate peaks 
-    'brange', [1, 50], ...
-    'axrange', [1, 250], ...            % aortic regions range (ms)
-    'nst', 30, ...                      % default template size
-    'err', 30, ...                      % default error 
-    'multikalman', 1, ...               % algorithm defaults to peak;mu state vector
-    'singlekalman', 0, ...              % algorithm can be set to peak state vector
-    'verbose', 1, ...                   % set f0r debugging 
-    'plot', 1, ...                      % set for debugging 
-    'qconst', 0.2, ...                  % process noise covariance scalar
-    'rconst', 1, ...                    % observation noise covariance scalar
-    'influence' , [], ...               % how much the new peak will influence the overall mean 
-    'hweight', 2, ...
-    'custom', [], ...
-    'ensavg', 0, ...
-    'prealter', 0, ...
-    'promconst', 10, ...                % the prominence constant 
-    'del', 0, ...                       % 0: when using ndim > 1 calculate gmm with 2 dim 1: use gmm with time dim
-    'relweights', 0, ...                % relweights for cluster relative informaiton 
-    'mkfadaptive', 0, ...               % use dijk weighted multi-weighted adaptive 
-    'dijkweight', 0, ...                % use dijk altered malhabonis weights 
-    'strict', 0, ...                    % remove any crossings in training data
-    'pkadj', 1, ...                     %
-    'findextrema', 0, ...
-    'mixd2', 0, ...                 % use a combination of distance and prob for R matrix
-    'dijk_mixd2', 0, ...            % use a combination of distance and prob for dijk matrix
-    'qmatrix_abs', 0, ...           % use the actual peak values rather than the differences for q matrix construction
-    'gmmupdate', 1);                    % gmm update 
-
-% get the field names 
-optionNames = fieldnames(options);
-
-
-% parse Name Value Pairs if provided
-if ~isempty(varargin)
-    for arg = 1:length(varargin)
-        % check if a Name argument is given 
-        if isstr(varargin{arg})
-            
-            % make case insenstive 
-            field = lower(varargin{arg});
-            
-            % if optional name argument is valid
-            if any(strcmp(field, optionNames))
-                
-                % for name value pairs with non-boolean values save tho
-                if strcmp(field, 'gmm'); pos_gmm = varargin{arg+1};
-                % otherwise save into the options struct; 
-                elseif strcmp(field, 'training'); train_scg = varargin{arg+1}; options.training = 1;
-                elseif strcmp(field, 'ensavg'); M = varargin{arg+1}; options.ensavg = 1; 
-                else options.(field) = varargin{arg+1}; end
-              
-            % otherwise throw an error 
-            else
-                error([field, ' is not a valid Name Pair'])
-            end
-        end
-    end
+arguments 
+    scg_beats 
+    fs 
+    
+    %%% General arguments 
+    options.axrange = [1, 250]      % region to look for extremas [in ms]
+    options.ncand = 20              % max number of extrema candidates per beat
+    
+    %%% GMM arguments 
+    options.nclusters = 4           % number of clusters 
+    options.ndim = 1                % num dimensions to use for gmm (1: location, 2: prominence)
+    options.training = []           % training data provided 
+    options.brange = [1, 50]        % beat range for training GMM 
+    options.custom = []             % extremum used to warmstart the training process 
+    options.promconst =  3          % relaxement term to GMM (increase if training data does not change too much)
+    options.relweights = 1          % relative weights for cluster rel info 
+    options.findextrema =  0        % find optimal number of clusters intial locations
+    
+    %%% Dijkstra arguments 
+    options.dijkstra = 1            % use dijkstra 
+    options.dijkthresh = 0          % threshold to consider for nodes 
+    options.hweight = 2             % penalty term to avoid identical nodes chosen 
+    options.mixd2 = 0          % use a combination of distance and prob for dijk matrix
+    
+    %%% KF arguments 
+    options.influence = 1/10        % how much new extrema will affect extrema mean 
+    options.qconst = 0.2            % process noise covariance scalar
+    %options.mixd2 = 0,              % use a combination of distance and prob for R matrix
+    
+    %%% Miscellaneous arguments 
+    options.verbose = 1             % display progress updates 
+    options.plot = 1                % plot 
+    options.ensavg = []             % preprocessing ensemble avg of beats  
+      
+    options.dijkweight = 1          % use dijk altered malhabonis weights  
+    options.qmatrix_abs = 0         % use the actual peak values rather than the differences for q matrix construction
 end
+
 
 % if speicifed, apply exponential moving average on the beats
-if options.ensavg
-    scg_beats = cardio.general.ema(scg_beats, M, false);
-end
-
-% confirm that argument combination 
-if options.multikalman && ~options.gmmupdate
-    error('If Multikalman is used, GMMUpdate must be set to 1')
-end
-
-if options.singlekalman && options.multikalman 
-    error('If SingleKalman specified, MultiKalman must be set to 0')
-end
-
-if options.mkfadaptive && (~options.dijkstra || ~options.multikalman)
-    error('If MultiKalman Dijkstra Weighted Update is specified, Dijkstra must be set to 1, and MultiKalman must be set to 1')
-end
-
-% if options.pkadj && (~options.multikalman)
-%     error('If peak adjustment multikalman must be set to 1')    
-% end
-
-% if speicfiied indicate the arguments used 
-if options.verbose
-    
-    fprintf('Running sortPeaks with ')
-    
-    if options.dijkstra; fprintf('Dijkstra Sorting, ')
-    elseif ~options.dijkstra; fprintf('No Dijkstra Sorting, '); end
-        
-    if options.multikalman; fprintf('MultiKalman');
-        if options.mkfadaptive; fprintf(' with Dijkstra Weighted Updates, ')
-        else fprintf(', '); end
-    elseif options.singlekalman; fprintf('SingleKalman, ');            
-    else; fprintf('No Kalman, '); end
-    
-    if options.relweights; fprintf('Relative GMM Distance Weights, ')
-    elseif ~options.relweights; fprintf('No Relative GMM Distance Weights, '); end
-    
-    if ~options.prealter; fprintf('Kalmn filter multi using u_t = u_t + a*u_t-1, ')
-    elseif options.prealter; fprintf('Kalman filter multi using u_t = u_t-1, '); end
-    
-    if options.multikalman; fprintf('Kalman Tracked GMM Update');
-    elseif options.gmmupdate; fprintf('Single Step GMM Update');
-    else fprintf('No GMM Update'); end
-    
-    fprintf('\n')
-        
-end   
+if ~isempty(options.ensavg)
+    scg_beats = cardio.general.ema(scg_beats, options.ensavg, false);
+end 
 
 % get the number of beats
 nbeats = size(scg_beats, 2);
@@ -174,7 +101,7 @@ nbeats = size(scg_beats, 2);
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % if no custom training set is provided 
-if ~options.training
+if isempty(options.training)
     
     if options.verbose
         fprintf('Using beats %d to %d for training\n', options.brange(1), options.brange(2));
@@ -207,43 +134,48 @@ else
     mu_val = options.influence;
 end
 
-%if manual cluster locations were provided
+% find the training samples using custom initializations or automatically
+% finding them              
+sliding_nst = 30; % sliding template ensemble size 
+sliding_err = 30; % sliding template extrema looking size
 if ~isempty(options.custom)
     
     % find approximate peak and valley features of aortic complexes using
-    % sliding template
+    % sliding template with warm start of relevant features
     [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
-        options.nst, options.err, fs, 'Closest', 'Axrange', options.axrange, ...
+        sliding_nst, sliding_err, fs, 'Closest', 'Axrange', options.axrange, ...
         'NumFeatures', options.nclusters, 'Manual', options.custom);
     
     % calculate total number of clusters
     options.nclusters = size(train_maxlocs, 1) + size(train_minlocs, 1);
 
-    
-% if no manual cluster locations were provided
+
 else
     
-    
+    % if want to find optimal cluster number 
     if options.findextrema
         template = mean(train_scg, 2);
         perc_lim = 0.3;
         [locs_seq, loc_signs] = find_extremas(template, options.axrange, fs, perc_lim, options.plot);
         options.custom = [locs_seq, loc_signs];
         [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
-            options.nst, options.err, fs, 'Closest', 'Axrange', options.axrange, ...
+            sliding_nst, sliding_err, fs, 'Closest', 'Axrange', options.axrange, ...
             'Manual', options.custom);
+        
         % calculate total number of clusters
         options.nclusters = size(train_maxlocs, 1) + size(train_minlocs, 1);
        
     else
-    % find approximate peak and valley features of aortic complexes using
-    % sliding template with warm start of relevant features 
-    [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
-        options.nst, options.err, fs, 'Closest', 'Axrange', options.axrange, ...
-        'NumFeatures', options.nclusters, 'Emd');
+        
+        % find approximate peak and valley features of aortic complexes using
+        % sliding template  
+        [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
+            sliding_nst, sliding_err, fs, 'Closest', 'Axrange', options.axrange, ...
+            'NumFeatures', options.nclusters, 'Emd');
     end
 end
 
+% set number of peka and valley clusters 
 npkclusters = size(train_maxlocs, 1);
 nvalclusters = size(train_minlocs, 1);
 
@@ -261,7 +193,7 @@ train_minlocs = train_minlocs(:, sortidx);
 extremas = [mean(train_maxlocs), mean(train_minlocs)];
 extrema_signs = [ones(1, size(train_maxlocs, 2)), zeros(1, size(train_minlocs, 2))];
 
-% sort the peak and valley clusters and apply sorting on their signs and
+% sort the peak and valley clusters by location and apply sorting on their signs and
 % index number 
 [~, extrema_gmm_ord] = sort(extremas, 'ascend');
 extrema_signs = extrema_signs(extrema_gmm_ord);
@@ -270,8 +202,7 @@ extrema_signs = extrema_signs(extrema_gmm_ord);
 extrema_cols = [1:size(train_maxlocs, 2), 1:size(train_minlocs, 2)];
 extrema_cols = extrema_cols(extrema_gmm_ord);
 
-% if the ordering of signs is not peak, valley, peak or valley, peak,
-% valley
+% if the ordering of peaks and valleys do not alternate
 if sum(diff(extrema_signs) == 0) ~= 0
     
     % find the locations where the peak/valley sequence fails
@@ -295,44 +226,18 @@ if sum(diff(extrema_signs) == 0) ~= 0
     
     % inidcate to the user that the number of clusters specified was lowered
     disp(['Was instructed to find ', num2str(options.nclusters), '. However only ', ...
-        num2str(nvalclusters+npkclusters), ' were tracked'])
+        num2str(nvalclusters+npkclusters), ' were tracked due to non-alternating clusters'])
     
     % update total number of clusters
     options.nclusters = npkclusters + nvalclusters;
     
-    % concatentate peak/valley mean locations and signs (1/0)
+    % resort 
     extremas = [mean(train_maxlocs), mean(train_minlocs)];
     extrema_signs = [ones(1, size(train_maxlocs, 2)), zeros(1, size(train_minlocs, 2))];
-        
-    % sort peak/valley clusters and apply sorting on signs 
     [~, extrema_gmm_ord] = sort(extremas, 'ascend');
     extrema_signs = extrema_signs(extrema_gmm_ord);
-    
-    % assign index number to peaks/valleys and apply sorting 
     extrema_cols = [1:size(train_maxlocs, 2), 1:size(train_minlocs, 2)];
     extrema_cols = extrema_cols(extrema_gmm_ord);    
-    
-end
-
-% if strictness of training set is specified (no crossings between clusters)
-if options.strict
-    
-    % concatenate peaks/valley and sort based on sign order
-    all_extremas = [train_maxlocs, train_minlocs];
-    all_extremas = all_extremas(:, extrema_gmm_ord);
-    
-    % find beat indices where the locations are not strictly ascending
-    crossings = sum((diff(all_extremas, [], 2) < 0) > 0, 2);
-    
-    % remove those beats and separate them back into peak and valley clusters
-    all_extremas = all_extremas(~crossings, :);
-    train_maxlocs = all_extremas(:, extrema_signs == 1);
-    train_minlocs = all_extremas(:, extrema_signs == 0); 
-    
-    % recreate training set and update number of beats
-    train_scg = train_scg(:, ~crossings);
-    ntrain_beats = size(train_scg, 2);
-    ranges = 1:ntrain_beats;
     
 end
 
@@ -390,6 +295,10 @@ end
 %                1b       Training GMM
 % 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+if options.verbose
+    disp('Training GMM')
+end
 
 % create a gmm object for the peak clusters
 pos_gmm = GMM('nclusters', npkclusters, 'ndim', options.ndim);
@@ -451,7 +360,8 @@ train_negdata = zeros([size(train_minlocs), options.ndim]);
 % set the data to the first dimensions 
 train_negdata(:, :, 1) = train_minlocs;
 
-% for each vallye cluster
+% for each valley cluster training data link additional features to each
+% valley
 if options.ndim > 1
     
     % set placeholder for prominences of the training valley locations
@@ -493,9 +403,6 @@ neg_gmm = neg_gmm.fitModel(train_negdata);
 
 % if using multi dimensions 
 if options.ndim ~= 1
-    %neg_gmm.Sigma(end, end, :) = neg_gmm.Sigma(end, end, :)*options.promconst;
-    %pos_gmm.Sigma(end, end, :) = pos_gmm.Sigma(end, end, :)*options.promconst;
-    
     neg_gmm.Sigma = neg_gmm.Sigma*options.promconst;
     pos_gmm.Sigma = pos_gmm.Sigma*options.promconst;
 end
@@ -505,9 +412,13 @@ if options.plot
     figure;
     neg_gmm.genGMMcontour(train_negdata)
     pos_gmm.genGMMcontour(train_posdata)
+    xlabel('Location')
+    if options.ndim == 2
+        ylabel('Prominence')
+    end
 end
 
-% find the order of the peak/valley clusters and their associated signs (0/1)
+% find the order of the peak/valley clusters by locations and their associated signs (0/1)
 [~, extrema_gmm_ord] = sort([pos_gmm.mu(:, 1); neg_gmm.mu(:, 1)], 'ascend');
 extrema_signs = [ones(size(pos_gmm.mu(:, 1))); zeros(size(neg_gmm.mu(:, 1)))];
 extrema_signs = extrema_signs(extrema_gmm_ord);
@@ -515,17 +426,18 @@ extrema_signs = extrema_signs(extrema_gmm_ord);
 % determine if the first extrema is a vally or peak
 extrema_first = extrema_signs(1);
 
-% extract whether calculating distance just on time or all available
-% dimensions 
-del = options.del;
 
-% initialize placeholder for relative distances of peaks to other clusters
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%       
+%                1b.i      Learning intercluster distances
+% 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% initialize placeholder for relative distances (using only location feature) of peaks clusuters to other clusters
 unprep_pos_relations = zeros(options.nclusters, npkclusters);
-
-% for each peak cluster
 for i = 1:npkclusters
     
-    % calculate distances of peaks using just the time axis with peak cluster i to both peak and valley gmms
+    % calculate distances of peaks using just the location axis with peak cluster i to both peak and valley gmms
     [~, ~, ~, pos_d2] = pos_gmm.evalPoints(permute(unprep_train_posdata(:, i, :), [1, 3, 2]), 'type', 'mdist', 1);
     [~, ~, ~, neg_d2] = neg_gmm.evalPoints(permute(unprep_train_posdata(:, i, :), [1, 3, 2]), 'type', 'mdist', 1);
     
@@ -535,17 +447,11 @@ for i = 1:npkclusters
     
     % calculate average distances between all gmms and all valleys in valley cluster i
     dist_pos_relations = mean(d2, 1)';
-    
-    %%%%%%%%%%%%%%%% I WILL NEED THIS %%%%%%%%%%%%%%%%%%%%%
-%     [~, idx] = min(dist_pos_relations);
-%     sign_relations = ones(size(dist_pos_relations));
-%     sign_relations(1:idx-1) = -1;
-%     unprep_pos_relations(:, i) = sign_relations .* dist_pos_relations;
 
     unprep_pos_relations(:, i) = dist_pos_relations;
 end
 
-% initialize placeholder for realtive distances with other clusters
+% initialize placeholder for realtive distances (using only location feature) of valley clusters with other clusters
 unprep_neg_relations = zeros(options.nclusters, nvalclusters);
 for i = 1:size(unprep_train_negdata, 2)
     
@@ -560,12 +466,6 @@ for i = 1:size(unprep_train_negdata, 2)
     % calculate average distances between all gmms and all valleys in valley cluster i
     dist_neg_relations = mean(d2, 1)';
     
-    %%%%%%%%%%%%%%%% I will need this for 
-    %%%%%%%%%%%%%%%%%% Consider using the x/y dimensions of d2 
-%     [~, idx] = min(dist_neg_relations);
-%     sign_relations = ones(size(dist_neg_relations));
-%     sign_relations(1:idx-1) = -1;
-%    unprep_neg_relations(:, i) = sign_relations .* dist_neg_relations;
     unprep_neg_relations(:, i) = dist_neg_relations;
 end
 
@@ -586,89 +486,40 @@ sortedProms = sortedPeaks;
 %          1c. Initialize Kalman Parameters
 %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-if options.multikalman
-    % here we assume state_vector = [p1, p2, p3, p4, u1, u2, u3, u4]
-    nstates = options.nclusters*2; % based on number of kalman filters prior ]  
-   
-    % predicted big boi
-    P_pred = zeros(nstates, nstates);
 
-    % residual big boi 
-    res = zeros(nbeats, nstates);
+% here we assume state_vector = [p1, p2, p3, p4, u1, u2, u3, u4]
+nstates = options.nclusters*2; % ncluster + ncluster_means
 
-    % state estimation matrix 
-    stateEst = zeros(nbeats, nstates);   
+% prediction matrix, residuals, state estimation matrix
+P_pred = zeros(nstates, nstates);
+res = zeros(nbeats, nstates);
+stateEst = zeros(nbeats, nstates);   
+ss_S = zeros(nstates, nstates);
 
-    % create state transition matrix (assume mu_t = mu_t-1) 
-    ss_A = eye(nstates);
-    
-    % if specified our state vector is now mu_t+1 = mu_t-1 + a*(mu_t-1 + peak_t-1) 
-    if ~options.prealter
-        ss_A(options.nclusters+1:end, 1:options.nclusters) = mu_val*eye(nstates/2);
-        ss_A(options.nclusters+1:end, options.nclusters+1:end) = ...
-            -1*mu_val*eye(nstates/2) + ss_A(options.nclusters+1:end, options.nclusters+1:end);
-    end
-    
-    % state to observation matrix (assuming states are observations)
-    ss_C = eye(nstates);
-    % create process noise matrix 
-    train_extrema = [train_maxlocs, train_minlocs];
-    train_extrema = train_extrema(:, extrema_gmm_ord);
-    train_mu = [reshape(pos_gmm.model.mu(:, 1), 1, []), reshape(neg_gmm.model.mu(:, 1), 1, [])];
-    train_mu = train_mu(extrema_gmm_ord);
-   
-    if options.qmatrix_abs
-        train_mu_vec = zeros(size(train_extrema));
-        train_mu_vec(1, :) = train_mu;
-        for i = 2:size(train_extrema, 1)
-            train_mu_vec(i, :) = train_mu_vec(i-1, :) + (mu_val)*(train_extrema(i, :) - train_mu_vec(i-1, :));
-        end
-        %train_mu_vec = movmean(train_extrema, 10);
-        covMatrix = abs(cov([train_extrema, train_mu_vec]));
-    else
+% create state transition matrix (assume mu_t = mu_t-1) 
+ss_A = eye(nstates);
 
-        covpeaks = diff(train_extrema);
-        covmu = diff((train_extrema - train_mu)*mu_val);
-        covMatrix = cov([covpeaks, covmu]);
-        %covMatrix = diag(diag(covMatrix)); % edit 2/17/2022
-    end
-    ss_S = zeros(size(ss_A, 1), size(ss_C, 1)); 
+ss_A(options.nclusters+1:end, 1:options.nclusters) = mu_val*eye(nstates/2);
+ss_A(options.nclusters+1:end, options.nclusters+1:end) = ...
+    -1*mu_val*eye(nstates/2) + ss_A(options.nclusters+1:end, options.nclusters+1:end);
 
-    % set the initial state...but this will definitely be different 
-    kFstatePred = [train_extrema(1, :), train_mu];
-    
-elseif options.singlekalman
-    
-    nstates = options.nclusters; % based on number of kalman filters prior ]  
+% state to observation matrix (assuming states are observations)
+ss_C = eye(nstates);
+% create process noise matrix 
+train_extrema = [train_maxlocs, train_minlocs];
+train_extrema = train_extrema(:, extrema_gmm_ord);
+train_mu = [reshape(pos_gmm.model.mu(:, 1), 1, []), reshape(neg_gmm.model.mu(:, 1), 1, [])];
+train_mu = train_mu(extrema_gmm_ord);
 
-    % predicted big boi
-    P_pred = zeros(nstates, nstates);
+% estimate covariances 
+covpeaks = diff(train_extrema);
+covmu = diff((train_extrema - train_mu)*mu_val);
+covMatrix = cov([covpeaks, covmu]);
 
-    % residual big boi 
-    res = zeros(nbeats, nstates);
-    
-    % state estimation big boi
-    stateEst = zeros(nbeats, nstates);  
-    
-    % state transition matrix, state to obs matrix 
-    ss_A = eye(nstates);
-    ss_C = eye(nstates);
-    ss_S = zeros(size(ss_A, 1), size(ss_C, 1));
-    
-    % 
-    train_extrema = [train_maxlocs, train_minlocs];
-    train_extrema = train_extrema(:, extrema_gmm_ord);
-    covpeaks = diff(train_extrema);
-    covMatrix = cov(covpeaks);
-    %covMatrix = diag(diag(covMatrix));
-    kFstatePred = train_extrema(1, :);
-    
-end
-    
-    
+% set the initial state
+kFstatePred = [train_extrema(1, :), train_mu];
 
-
-
+    
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %
 %                   2a Prepping Data for Testing
@@ -722,19 +573,24 @@ for beat = 1:size(pos_cand, 1)
         fprintf(['Beat ', num2str(beat), ' has no features and will be skippe\n'])
         continue;
     end
-    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %
+    %                   2b Applying GMM and enforcing intercluster
+    %                   relations
+    %
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % evaluate peak and valley data on positive gmm 
-    [~, pos_post_pdf, ~, pos_d2] = pos_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', del);
-    [~, ~, ~, pos_neg_d2] = pos_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', del);
+    [~, pos_post_pdf, ~, pos_d2] = pos_gmm.evalPoints(test_posdata, 'type', 'mdist');
+    [~, ~, ~, pos_neg_d2] = pos_gmm.evalPoints(test_negdata, 'type', 'mdist');
     
     % evaluate peak and valley data on negative gmm
-    [~, neg_post_pdf, ~, neg_d2] = neg_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', del);
-    [~, ~, ~, neg_pos_d2] = neg_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', del);
+    [~, neg_post_pdf, ~, neg_d2] = neg_gmm.evalPoints(test_negdata, 'type', 'mdist');
+    [~, ~, ~, neg_pos_d2] = neg_gmm.evalPoints(test_posdata, 'type', 'mdist');
     
-    % if using the relative distances between a peak/valley to all clusters
-    %
-    % break down the distnace in terms of time and prom dimensions and ONLY
-    % alter time if using multiple dimensions 
+    % Adjust GMM scores by enforcing intercluster distances 
+    % Motvation: a extremum is well associated with a cluster C_i if the
+    % extremum's relation to the other clusters C_j != C_i is similar to the cluster's
+    % mean C_i_mu relation to the other cluster
     if options.relweights
         
         pos_d2_time = pos_d2;
@@ -744,19 +600,17 @@ for beat = 1:size(pos_cand, 1)
         neg_pos_d2_time = neg_pos_d2;
         
         if options.ndim == 2
-            % evaluate peak and valley data on positive gmm time dim
+            % evaluate inputs on positive gmm location dim
             [~, ~, ~, pos_d2_time] = pos_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', 1);
             [~, ~, ~, pos_neg_d2_time] = pos_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', 1);
 
-            % evaluate peak and valley data on negative gmm time dim
+            % evaluate inputs on negative gmm location dim
             [~, ~, ~, neg_d2_time] = neg_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', 1);
             [~, ~, ~, neg_pos_d2_time] = neg_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', 1);
             
             % calculate distance in terms of prominence
             pos_d2_prom = sqrt(pos_d2.^2 - pos_d2_time.^2);
             pos_neg_d2_prom = sqrt(pos_neg_d2.^2 - pos_neg_d2_time.^2);
-            
-            %
             neg_d2_prom = sqrt(neg_d2.^2 - neg_d2_time.^2);
             neg_pos_d2_prom = sqrt(neg_pos_d2.^2 - neg_pos_d2_time.^2);
             
@@ -774,31 +628,25 @@ for beat = 1:size(pos_cand, 1)
         all_gmm_d2 = [pos_cand_d2;neg_cand_d2];
         all_gmm_d2 = all_gmm_d2(cand_sort_idx, :);
         
-        % for each peak cluster 
+        % adjust time score by inter-cluster distances previously learned 
         for i = 1:npkclusters
             % take the mean of the abs differences of peak to all gmm clusters
             % to the ith gmm peak cluster to all other clusters
             pos_adj_d2(:, i) = mean(abs(pos_cand_d2 - unprep_pos_relations(:, i)'), 2);
         end
         
-        % for each valley cluster
         for i = 1:nvalclusters
             % take the mean of the abs differences of valleys to all gmm clusters
             % to the ith gmm valley cluster to all other clusters
             neg_adj_d2(:, i) = mean(abs(neg_cand_d2 - unprep_neg_relations(:, i)'), 2);
         end
         
-        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        % save original distances (for debugging)
-        pos_d2_temp = pos_d2;
-        neg_d2_temp = neg_d2;
         
         % overwrite with adjusted distances with weighted normalization
         pos_d2 = pos_adj_d2;
         neg_d2 = neg_adj_d2;
         
-        % if using prom and time dimensions update the total distance with
-        % the increased or reduced distances 
+        % add the prominence score back in
         if options.ndim == 2
             
             % new d2 is sqrt(
@@ -816,41 +664,7 @@ for beat = 1:size(pos_cand, 1)
     % get the total number of candidates and number of peak/valley 
     npkcands = size(test_posdata, 1);
     nvalcands = size(test_negdata, 1);
-    nextrema = nvalcands+npkcands;
-
-    % save data, d2, probs, nrobs into struct array info for easy viewing
-    % later 
-    test_exttime = [test_posdata(:, 1);test_negdata(:, 1)];
-    test_extsign = [ones(npkcands, 1);zeros(nvalcands, 1)];         
-    % sort the locations and apply learned sorting to signs 
-    [~, extrema_cand_ord] = sort(test_exttime, 'ascend');
-    test_extdata = [test_posdata; test_negdata];
-    test_extdata = test_extdata(extrema_cand_ord, :);
-    test_extsign = test_extsign(extrema_cand_ord);  
-    % matrix to use for prob saving 
-    prob_matrix = zeros(nextrema, options.nclusters);
-    prob_matrix(1:npkcands, 1:npkclusters) = pos_post_pdf;
-    prob_matrix(end-nvalcands+1:end, end-nvalclusters+1:end) = neg_post_pdf;
-    prob_matrix = prob_matrix(extrema_cand_ord, :);
-    prob_matrix = prob_matrix(:, extrema_gmm_ord);
-    % matrix to use for prob saving 
-    d2_matrix = ones(nextrema, options.nclusters)*inf;
-    d2_matrix(1:npkcands, 1:npkclusters) = pos_d2;
-    d2_matrix(end-nvalcands+1:end, end-nvalclusters+1:end) = neg_d2;
-    d2_matrix = d2_matrix(extrema_cand_ord, :);
-    d2_matrix = d2_matrix(:, extrema_gmm_ord);
-    % matrix to use for prob saving 
-    nprob_matrix = zeros(nextrema, options.nclusters);
-    nprob_matrix(1:npkcands, 1:npkclusters) = pos_gnpost_pdf;
-    nprob_matrix(end-nvalcands+1:end, end-nvalclusters+1:end) = neg_gnpost_pdf;
-    nprob_matrix = nprob_matrix(extrema_cand_ord, :);
-    nprob_matrix = nprob_matrix(:, extrema_gmm_ord);
-    info(beat).d2 = d2_matrix;
-    info(beat).probs = prob_matrix;
-    info(beat).nprobs = nprob_matrix;
-    info(beat).data = [test_extsign, test_extdata];
-    
-    
+    nextrema = nvalcands+npkcands;   
     
     % placeholder for sorted peaks, distances, and probabilities 
     pos_sortedPeaks_i = zeros(options.ndim, npkclusters);
@@ -926,12 +740,16 @@ for beat = 1:size(pos_cand, 1)
         sortedProms_i = [pos_sortedPeaks_i(2, :), neg_sortedPeaks_i(2, :)];
         sortedProms(beat, :) = sortedProms_i(extrema_gmm_ord);
     end
-    %%%%%%%%%%%%%%%%%%%%% SHOULD CHECK THIS FOR SOME REASON THE DISTANCES
-    %%%%%%%%%%%%%%%%%%%%% ARE 0 SOMETIMES
+    
+    % set all zeros to small values 
     pos_d2(pos_d2 == 0) = 1e-3;
     neg_d2(neg_d2 == 0) = 1e-3;
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %
+    %                   2c Applying Dijkstras
+    %
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % run the Dijkkstra algorithm if specified 
     if options.dijkstra
 
@@ -972,7 +790,7 @@ for beat = 1:size(pos_cand, 1)
         % with inf distance for pk to val gmm and val to pk gmm
         value_matrix = ones(nextrema, options.nclusters)*inf; 
         
-        if options.dijk_mixd2
+        if options.mixd2
             % fill in pk to pk gmm and val to val gmm probabilities 
             value_matrix(1:npkcands, 1:npkclusters) = arrayfun(@(x) min(x, 1e4), exp((1./pos_gnpost_pdf)-1).*pos_d2);
             value_matrix(end-nvalcands+1:end, end-nvalclusters+1:end) = arrayfun(@(x) min(x, 1e4), exp((1./neg_gnpost_pdf)-1).*neg_d2); 
@@ -990,11 +808,6 @@ for beat = 1:size(pos_cand, 1)
         if beat > 1
             mu_temp = [reshape(pos_gmm.mu(:, 1), 1, []), reshape(neg_gmm.mu(:, 1), 1, [])];
             mu_temp = mu_temp(extrema_gmm_ord);
-%             mu_temp = sortedPeaks(beat-1, :);
-%             extdata_temp = repmat(test_extdata, 1, 3);
-%             extdata_temp = abs(extdata_temp - mu_temp);
-%             extdata_temp_idx = (extdata_temp > 40*fs/1000);
-%             value_matrix(extdata_temp_idx) = 1e3;
         end
         
         % matrix to use for prob saving 
@@ -1052,30 +865,7 @@ for beat = 1:size(pos_cand, 1)
         
         % if there are multiple candidate routes 
         if length(node_dist) ~= 1
-            
-            % testing region 
-            if custom_choice && beat > 1
-                % try 2 things:
-                %   1. use previous peaks 
-                %   2. if 2 
-                % find top 3 routes (if available)
-                [~, best_cand] = sort(node_dist, 'ascend');
-                try
-                % get the top 2 candidates routes based on distance 
-                best_cand = best_cand(1:min(2, length(best_cand)));
-                catch
-                    best_cand;
-                end
-                
-                % reduce the size of the routes in terms of 
-                pk_vals_routes = pk_vals_routes(best_cand, :);
-                pk_idx_routes = pk_idx_routes(best_cand, :);
-                node_dist_routes = node_dist_routes(best_cand, :);
-                
-                % use prior sorted extremas as reference to choose a route
-                [~, best_route_idx] = min(sum((sortedPeaks(beat - 1, :) - pk_vals_routes).^2, 2));
-            end
-            
+
             % get the location, indices, and distance of the pk/val sequence
             best_pk_vals_route = pk_vals_routes(best_route_idx, :);
             best_pk_idx_route = pk_idx_routes(best_route_idx, :);
@@ -1110,159 +900,81 @@ for beat = 1:size(pos_cand, 1)
         sortedPeaks_nprobs(beat, :) = general.indexMatrix(nprob_matrix, best_pk_idx_route')';
         
     end
+        
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %
+    %                   2d Applying Kalman Filter
+    %
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     
-    
-    if options.multikalman
-        
-        % here we are assuming the observation/state vector matrix is  
-        % [p1, p2, p3, p4, u1, u2, u3, u4];
-        % kF obs dependent on which peaks you are choosing 
-        peakobs = sortedPeaks(beat, :);
-        
-        % extract and sort current location means of pk/val gmm 
-        muobs = [reshape(pos_gmm.mu(:, 1), 1, []), reshape(neg_gmm.mu(:, 1), 1, [])];
-        muobs = muobs(extrema_gmm_ord);
-        
-        % if we want to adjust the mean observation 
-        if options.prealter
-             muobs = muobs + (peakobs - muobs).*sortedPeaks_nprobs(beat, :);
-        end
-        
-        % create state vector, combining extrema vector and means 
-        kFobs = [peakobs, muobs];
-        
-        % given the best route in nodes, find the associated diatances 
-        %node_ind = sub2ind(size(d2), dijk.rowidx(best_node_route), ...
-        %    dijk.colidx(best_node_route))';
-        
-         % set the observation nosie covariacne R using the mahalbonis
-         % distances and upper threshold if necessary 
-         %peakR = d2(node_ind);
-%         [~, ~, ~, pos_d2] = pos_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', del);
-%         [~, ~, ~, pos_neg_d2] = pos_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', del);
-%         [~, neg_post_pdf, ~, neg_d2] = neg_gmm.evalPoints(test_negdata, 'type', 'mdist', 'delay', del);
-%         [~, ~, ~, neg_pos_d2] = neg_gmm.evalPoints(test_posdata, 'type', 'mdist', 'delay', del);
 
-         % calculate distances JUST on time
-         [~, ~, ~, pos_d2] = pos_gmm.evalPoints(peakobs(extrema_signs == 1), 'type', 'mdist', 'delay', 1);
-         [~, ~, ~, neg_d2] = neg_gmm.evalPoints(peakobs(extrema_signs == 0), 'type', 'mdist', 'delay', 1);
-         
-         % use the distances saved 
-         if options.mixd2
-             peakR = exp(1./sortedPeaks_nprobs(beat, :) - 1).*sortedPeaks_d2(beat, :)*options.rconst;
-         else
-            peakR = sortedPeaks_d2(beat, :)*options.rconst;
-         end
-         % if using distances JUST on time replace R vector with those
-         % distances
-         %peakR(extrema_signs == 1) = pos_d2; peakR(extrema_signs == 0) = neg_d2;
-         
-         % calculate 
-         muR = peakR*mu_val; 
-         R_vec = [peakR, muR];
-         kFthresh = 1e4*ones(1, nstates);
-         ss_R = diag(min(abs([R_vec; kFthresh])));
-         
-         % set the process noise covariance 
-         ss_Q = options.qconst*covMatrix;
-         
-         info(beat).R = ss_R;
-         info(beat).P = P_pred;
-         % actually stateEst is the output or the state to output matrix C
-         % times kFstatePred the posterior state prediction
-         % for the updating single step mu 
-         [stateEst(beat, :), kFstatePred, P_pred, res(beat, :)] = ...
-             kalmanFilterAlt(ss_A, ss_C, ss_Q, ss_R, ss_S, ...
-             kFobs, 'forLoop', kFstatePred, P_pred);
-         info(beat).res = res(beat, :);   
-         info(1).Q = ss_Q;
-
-         % if are trying to impose some 
-         if options.mkfadaptive
-             pos_gmm.mu = pos_gmm.mu + (sortedPeaks(beat, extrema_signs==1)' - pos_gmm.mu).*1./peakR(extrema_signs == 1)'*mu_val;
-             neg_gmm.mu = neg_gmm.mu + (sortedPeaks(beat, extrema_signs==0)' - neg_gmm.mu).*1./peakR(extrema_signs == 0)'*mu_val;
-             
-         % if     
-         else
-             
-             % extract new means from state equations and replace pk/val
-             % gmm location means 
-             new_mu = stateEst(beat, options.nclusters+1:end)';
-             pos_gmm.mu(:, 1) = new_mu(extrema_signs == 1);
-             neg_gmm.mu(:, 1) = new_mu(extrema_signs == 0);
-             
-         end
-         if options.pkadj
-             sortedPeaks(beat, :) = stateEst(beat, 1:options.nclusters);
-         end
-
-    end
-    
-    if options.singlekalman 
-    
-        % kF obs dependent on which peaks you are choosing 
-        kFobs = sortedPeaks(beat, :);
-
-        % given the best route in nodes, find the associated diatances 
-        % node_ind = sub2ind(size(d2), dijk.rowidx(best_node_route), ...
-        %    dijk.colidx(best_node_route))';
-
-         % set the observation nosie covariacne R using the mahalbonis
-         % distances and upper threshold if necessary 
-         % R_vec = d2(node_ind);
-         % use the distances saved 
-         if options.mixd2
-             peakR = exp(1./sortedPeaks_nprobs(beat, :) - 1).*sortedPeaks_d2(beat, :)*options.rconst;
-         else
-            peakR = sortedPeaks_d2(beat, :)*options.rconst;
-         end
-         R_vec = peakR;
-         kFthresh = 1e4*ones(1, nstates);
-         ss_R = diag(min(abs([R_vec; kFthresh])));
-         
-         % set the process noise covariance matrix 
-         ss_Q = options.qconst*covMatrix;
-         
-         % for the 
-         [stateEst(beat, :), kFstatePred, P_pred, res(beat, :)] = ...
-             kalmanFilterAlt(ss_A, ss_C, ss_Q, ss_R, ss_S, ...
-             kFobs, 'forLoop', kFstatePred, P_pred);
-
-          sortedPeaks(beat, :) = stateEst(beat, 1:options.nclusters);
-         % update the distances with the new peaks provided 
-         %%%%% 10/25/2021 Since this is smoothening i don't actually want
-         %%%%% to do this because I want the distance of the original peaks
-         %%%%% 
-         %[~, newpost_pdf, ~, newd2] = gmm.evalPoints(sortedPeaks(beat, :)', 'type', 'mdist');
-         %sortedPeaks_d2(beat, :) = newd2';
-         %sortedPeaks_prob(beat, :) = newpost_pdf'; 
         
-    end
-    
-    % update 
-    if options.gmmupdate && ~options.multikalman
-        
-        % update mu 
-        old_pos_mu = pos_gmm.mu(:, 1);
-        
-        new_pks = sortedPeaks(beat, extrema_signs == 1)';
-        pos_gmm.mu(:, 1) = old_pos_mu + (new_pks - old_pos_mu) * mu_val; 
-        
-        old_neg_mu = neg_gmm.mu(:, 1);
-        new_vals = sortedPeaks(beat, extrema_signs == 0)';
-        neg_gmm.mu(:, 1) = old_neg_mu + (new_vals - old_neg_mu) * mu_val; 
-            
-    end
+    % here we are assuming the observation/state vector matrix is  
+    % [p1, p2, p3, p4, u1, u2, u3, u4];
+    % kF obs dependent on which peaks you are choosing 
+    peakobs = sortedPeaks(beat, :);
+
+    % extract and sort current location means of pk/val gmm 
+    muobs = [reshape(pos_gmm.mu(:, 1), 1, []), reshape(neg_gmm.mu(:, 1), 1, [])];
+    muobs = muobs(extrema_gmm_ord);
+
+
+    % create state vector, combining extrema vector and means 
+    kFobs = [peakobs, muobs];
+
+     % calculate distances JUST on time
+    [~, ~, ~, pos_d2] = pos_gmm.evalPoints(peakobs(extrema_signs == 1), 'type', 'mdist', 'delay', 1);
+    [~, ~, ~, neg_d2] = neg_gmm.evalPoints(peakobs(extrema_signs == 0), 'type', 'mdist', 'delay', 1);
+
+     % use the distances saved 
+     %if options.mixd2
+     peakR = exp(1./sortedPeaks_nprobs(beat, :) - 1).*sortedPeaks_d2(beat, :);
+     %else
+     %   peakR = sortedPeaks_d2(beat, :);
+     %end
+
+     % calculate 
+     muR = peakR*mu_val; 
+     R_vec = [peakR, muR];
+     kFthresh = 1e4*ones(1, nstates);
+     ss_R = diag(min(abs([R_vec; kFthresh])));
+
+     % set the process noise covariance 
+     ss_Q = options.qconst*covMatrix;
+
+     info(beat).R = ss_R;
+     info(beat).P = P_pred;
+     % actually stateEst is the output or the state to output matrix C
+     % times kFstatePred the posterior state prediction
+     % for the updating single step mu 
+     [stateEst(beat, :), kFstatePred, P_pred, res(beat, :)] = ...
+         kalmanFilterAlt(ss_A, ss_C, ss_Q, ss_R, ss_S, ...
+         kFobs, 'forLoop', kFstatePred, P_pred);
+     info(beat).res = res(beat, :);   
+     info(1).Q = ss_Q;
+
+     % extract new means from state equations and replace pk/val
+     % gmm location means 
+     new_mu = stateEst(beat, options.nclusters+1:end)';
+     pos_gmm.mu(:, 1) = new_mu(extrema_signs == 1);
+     neg_gmm.mu(:, 1) = new_mu(extrema_signs == 0);
+
+     sortedPeaks(beat, :) = stateEst(beat, 1:options.nclusters);
+
+
     muobs = [reshape(pos_gmm.mu(:, 1), 1, []), reshape(neg_gmm.mu(:, 1), 1, [])];
     muobs = muobs(extrema_gmm_ord);
     allmu(beat, :) = muobs;
          
+
 end
 
 if options.plot
     figure;
     ax(1) = subplot(2, 1, 1);
-    imagesc(scg_beats); newmap = contrast(scg_beats); colormap(newmap); hold on
+    normalized_vals = normalize(scg_beats);
+    normalized_vals(isnan(normalized_vals)) = 0;
+    imagesc(normalize(scg_beats)); newmap = contrast(normalized_vals); colormap(newmap); hold on
     for i = 1:(options.nclusters)
         p = plot(sortedPeaks(:, i), 'LineWidth', 2);
         %p.Color(4) = 0.5;
@@ -1278,13 +990,13 @@ end
 
 % at the end merge proms with peaks 
 if options.ndim == 2
-    sortedPeaks = cat(3, sortedPeaks, sortedProms);
+    %sortedPeaks = cat(3, sortedPeaks, sortedProms);
 end
 varargout{1} = allmu;
 varargout{2} = sortedPeaks_d2;
 varargout{3} = sortedPeaks_probs;
 varargout{4} = sortedPeaks_nprobs;
-varargout{5} = info;
+%varargout{5} = info;
 %varargout{2} = pos_post_pdf;
 %varargout{3}= pos_gmm;
 end
@@ -1411,7 +1123,6 @@ function [datavec, groupvec, org_dim] = prep_data(data, range)
 end
 
 function [pos_cand, varargout] = findAO(scgbeats, num_cand, fs, ao_range, prom_flg)
-    %%%%%%%%%%%%%% Calculate top 10 peaks in each beat within 250ms %%%%%%%%%%
     
     % initialize locations, prominences, and widths of relevants peaks and
     % valleys 
