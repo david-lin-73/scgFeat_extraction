@@ -3,90 +3,88 @@ function [sortedPeaks, varargout] = sortPeaks(scg_beats, fs, options)
 % Let default be the  
 % Input (required)
 %       scg_beats    [MxN]      N beats of M samples each 
-%       fs           [dbl]      sampling frequency 
+%       fs           [dbl]      Sampling frequency (Hz)
 %
 % Inputs (optional)
-%       Update flg   [flg]      update GMM parameter flag 
-%       Dijktra flg  [flg]      Use Dijkstra for peak sorting flag 
-%       NumClusters  [dbl]      number of clusters to track
-%       Ndim         [dbl]      number of dimensions/features for each
-%                                   cluster (1: peak delay, 2: peak amplitude, 3:
-%                                   peak width)
-%       Dijktresh    [dbl]      Threshold for dijkstra to reduce node candidates
-%       Ncand        [dbl]      Max number of peaks to search for in each beat
-%       Brange       [1x2 dbl]  starting and ending idx of beats to use in training (if applicable)
-%       Axrange      [1x2 dbl]  starting and ending time (ms) to search for
+%       The most important ones to consider are: 'axrange', 'nclusters',
+%       'influence', 'promconst', 'brange', and findextrema. 
+%       The other parameters can more or less be set to their default values
+%
+%       axrange      [1x2 dbl]  Starting and ending time (ms) to search for
 %                                   relevant aortic peaks
-%       Multikalman  [flg]      use multikalman implementation 
-%       Singlekalman [flg]      use single kalman implementation 
-%       Verbose      [flg]      Output text flag 
-%       Plot         [flg]      Plot relevant plots flag 
-%       Qconst       [dbl]      constant to scale covariance matrix for
-%                                   kalman filter 
-%       Influence    [dbl]      how much each peak will influence the gmm
-%                                   update
-%       HWeight      [dbl]      how much to penalize paths where the same
-%                                   peak is selected for multiple clusters 
-%       Extrema      [flg]      Track peaks and valleys flag 
-%       Training     [KxM]          assume the argument provided is a clean K x M dataset
-%       Manual       [Bx2]     first column is index, second column is
+%       ncand        [int]      Max number of extrema to search for in each beat
+%       nclusters    [int]      Number of clusters to track
+%       ndim         [int]      Number of dimensions/features for each
+%                                   cluster (1: extrema time delay, 2: extrema prominence)
+%       training     [KxM]      Custom training set (if applicable) K beats of M samples each
+%       brange       [1x2 dbl]  Starting and ending idx of beats to use in training (if applicable)
+%       custom       [Cx2 dbl]  Force clusters to track. first column is index, second column is
 %                                   whether it is a peak or valley (1/0) 
+%       promconst    [dbl]      Relaxation term for GMM model
+%       relweights   [flg]      Applying relative clusster information for scoring
+%       findextrema  [flg]      Find a better set of extrema based on alternating pk/valley 
+%                                   and overall prominences
+%       dijkstra     [flg]      Use Dijkstra to find optimal sequence of extrema
+%       dijkthresh   [dbl]      Threshold to eliminate unrealistic nodes in Dijkstra
+%       hweight      [dbl]      Penalty term to reduce same extremas being chosen
+%       mixd2        [flg]      Use mahalabonis adjusted probability for Dijkstra graph
+%       influence    [dbl]      Influence of extrema on GMM mu's new location
+%       qconst       [dbl]      Constant to scale covariance matrix for
+%                                   kalman filter 
+%       verbose      [flg]      Print update messages 
+%       plot         [flg]      Plot various progress plots
+%       ensavg       [int]      Parameter for exponential moving average preprocessing
+%       dijkweight   [flg]      Use Dijkstra weighted score for Kalman filter
+%
 % Notes 
 %       This function will probably NOT work if scg_beats or the training
 %       set provided contains NaNs
 % Usage: 
-% use multi kalman filter with dijkstra (default) 
-% locs = sortPeaks(sepbeats_cln, fs, 'NClusters', 4, 'AXRange', [1, 250]);
-% use single kalman filter w/o dijkstra or update
-% locs = sortPeaks(sepbeats_cln, fs, 'NClusters', 4, 'AXRange', [1, 250], 'SingleKalman', 1, ...
-%    'MultiKalman', 0, 'Dijkstra', 1, 'Update', 0);
-% use multi kalman but penalize the same node being chosen for different clusters
-% locs = sortPeaks(sepbeats_cln, fs, 'NClusters', 4, 'AXRange', [1, 250], 'Hweight', 4);
-% use multi kalman but reduce influence of peaks on gmm update
-% locs = sortPeaks(sepbeats_cln, fs, 'NClusters', 4, 'AXRange', [1, 250], 'Influence', 1/1000);
-%srtpeakstoc = toc
-
+% find ao points with optiminal cluster searching
+% ao = sortPeaks(scg_beats, fs, 'axrange', [1, 250], 'verbose', false, 'findextrema', true);
+% find ac points 
+% ac = sortPeaks(scg_beats, fs, 'axrange', [250, 500], 'verbose', false, 'findextrema', true);
 arguments 
     scg_beats 
     fs 
     
-    %%% General arguments 
-    options.axrange = [1, 250]      % region to look for extremas [in ms]
+    %%% General arguments (default arguments)
+    options.axrange = [1, 250]      % region to look for extremas [in ms] default: ao region
     options.ncand = 20              % max number of extrema candidates per beat
     
-    %%% GMM arguments 
-    options.nclusters = 4           % number of clusters 
+    %%% GMM arguments (default arguments)
+    options.nclusters = 4           % number of clusters (decrease if there are fewer prominent features visually)
     options.ndim = 2                % num dimensions to use for gmm (1: location, 2: prominence)
     options.training = []           % training data provided 
     options.brange = [1, 50]        % beat range for training GMM 
     options.custom = []             % extremum used to warmstart the training process 
     options.promconst =  3          % relaxement term to GMM (increase if training data does not change too much)
     options.relweights = 1          % relative weights for cluster rel info 
-    options.findextrema =  0        % find optimal number of clusters intial locations
+    options.findextrema =  0        % find optimal number of clusters intial locations (set to 1 if clusters are not close together)
     
-    %%% Dijkstra arguments 
+    %%% Dijkstra arguments (default arguments)
     options.dijkstra = 1            % use dijkstra 
     options.dijkthresh = 0          % threshold to consider for nodes 
     options.hweight = 2             % penalty term to avoid identical nodes chosen 
     options.mixd2 = 0          % use a combination of distance and prob for dijk matrix
     
-    %%% KF arguments 
+    %%% KF arguments (default arguments)
     options.influence = 1/10        % how much new extrema will affect extrema mean 
+                                    %      (decrease to increase cluster movements and better track fast changes in extrema)
     options.qconst = 0.2            % process noise covariance scalar
     %options.mixd2 = 0,              % use a combination of distance and prob for R matrix
     
-    %%% Miscellaneous arguments 
+    %%% Miscellaneous arguments (default arguments)
     options.verbose = 1             % display progress updates 
     options.plot = 0                % plot 
-    options.ensavg = []             % preprocessing ensemble avg of beats  
+    options.ensavg = 0              % preprocessing exponential moving avg of beats  
       
     options.dijkweight = 1          % use dijk altered malhabonis weights  
-    options.qmatrix_abs = 0         % use the actual peak values rather than the differences for q matrix construction
 end
 
 
 % if speicifed, apply exponential moving average on the beats
-if ~isempty(options.ensavg)
+if options.ensavg ~= 0
     scg_beats = cardio.general.ema(scg_beats, options.ensavg, false);
 end 
 
@@ -995,6 +993,17 @@ if options.plot
     plot(sortedPeaks_nprobs); title('Probabilities (against other candidates)')
     linkaxes(ax, 'x')
 
+end
+
+% if there are extrema that exceed the ax looking window
+axrange_samps = options.axrange * fs / 1000; % change to samples
+if length(find(sortedPeaks < axrange_samps(1))) > 0
+    disp("Capping lower limit of extrema to " + string(axrange_samps(1)))
+    sortedPeaks(sortedPeaks < axrange_samps(1)) = axrange_samps(1);
+end
+if length(find(sortedPeaks > axrange_samps(2))) > 0
+    disp("Capping upper limit of extrema to " + string(axrange_samps))
+    sortedPeaks(sortedPeaks > axrange_samps(2)) = axrange_samps(2);
 end
 
 % at the end merge proms with peaks 
