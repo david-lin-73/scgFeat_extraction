@@ -143,7 +143,7 @@
                 % conditional prob p(g|x)
                 npost_pdf = post_pdf./sum(post_pdf, 2);
                 
-            % multi dim but just want to use 1 dim 
+            % multi dim but just want to use one dim 
             elseif obj.ndim ~= 1 && delay > 0
                 
                 % conditional prob p(x|g) and mahalabonis distance
@@ -202,9 +202,11 @@
         function genGMMcontour(obj, data, varargin)
         % visualization function 
             circle = 0;
+            type = 'positive';
             if ~isempty(varargin)
                 for arg = 1:length(varargin)
                    if strcmp('points', varargin{arg}); points = varargin{arg+1}; circle = 1; end  
+                   if strcmp('type', varargin{arg}); type = varargin{arg+1};; end  
                 end
             end
             % only do this if ndim = 2 or 3
@@ -228,10 +230,11 @@
                     scatter(points, gmPDF(points), [], 'r');
                 end
             elseif obj.ndim == 2
+
+                gmPDF = @(x,y) arrayfun(@(x0,y0) pdf(obj.model,[x0 y0]),x,y);
                 scatter(data(:,1),data(:,2),pointsz,'.') 
                 hold on
                 % https://www.mathworks.com/help/stats/gmdistribution.pdf.html
-                gmPDF = @(x,y) arrayfun(@(x0,y0) pdf(obj.model,[x0 y0]),x,y);
                 plotdim = [min(data(:, 1)), max(data(:, 1)), min(data(:, 2)), max(data(:, 2))];
                 fcontour(gmPDF,plotdim)
                 xlabel('Dim 1')
