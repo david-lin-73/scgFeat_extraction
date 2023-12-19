@@ -56,7 +56,7 @@ arguments
     
     %%% GMM arguments 
     options.nclusters = 4           % number of clusters 
-    options.ndim = 1                % num dimensions to use for gmm (1: location, 2: prominence)
+    options.ndim = 2                % num dimensions to use for gmm (1: location, 2: prominence)
     options.training = []           % training data provided 
     options.brange = [1, 50]        % beat range for training GMM 
     options.custom = []             % extremum used to warmstart the training process 
@@ -77,7 +77,7 @@ arguments
     
     %%% Miscellaneous arguments 
     options.verbose = 1             % display progress updates 
-    options.plot = 1                % plot 
+    options.plot = 0                % plot 
     options.ensavg = []             % preprocessing ensemble avg of beats  
       
     options.dijkweight = 1          % use dijk altered malhabonis weights  
@@ -136,7 +136,7 @@ end
 
 % find the training samples using custom initializations or automatically
 % finding them              
-sliding_nst = 30; % sliding template ensemble size 
+sliding_nst = min([30, ntrain_beats]); % sliding template ensemble size 
 sliding_err = 30; % sliding template extrema looking size
 if ~isempty(options.custom)
     
@@ -403,18 +403,19 @@ neg_gmm = neg_gmm.fitModel(train_negdata);
 
 % if using multi dimensions 
 if options.ndim ~= 1
-    neg_gmm.Sigma = neg_gmm.Sigma*options.promconst;
-    pos_gmm.Sigma = pos_gmm.Sigma*options.promconst;
+    neg_gmm.Sigma(1, 1, :) = neg_gmm.Sigma(1, 1, :)*options.promconst;
+    pos_gmm.Sigma(1, 1, :) = pos_gmm.Sigma(1, 1, :)*options.promconst;
 end
 
 % if sepcified show plot of distributions found with training data labeled
 if options.plot
     figure;
+
     neg_gmm.genGMMcontour(train_negdata)
     pos_gmm.genGMMcontour(train_posdata)
     xlabel('Location')
     if options.ndim == 2
-        ylabel('Prominence')
+        ylabel('Prominence')    
     end
 end
 
@@ -426,7 +427,9 @@ extrema_signs = extrema_signs(extrema_gmm_ord);
 % determine if the first extrema is a vally or peak
 extrema_first = extrema_signs(1);
 
-
+if options.verbose
+    disp('Done Training GMM')
+end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %       
@@ -569,8 +572,14 @@ for beat = 1:size(pos_cand, 1)
     % if no data is available skip! holy.... if we skip (which we don't
     % really, but if we do it looks at previous beats which currently have
     % 0??)
-    if sum(isnan(test_posdata)) + sum(isnan(test_negdata)) > 0
-        fprintf(['Beat ', num2str(beat), ' has no features and will be skippe\n'])
+    n_pos_nonnans = sum(~isnan(test_posdata(:, 1)));
+    n_neg_nonnans = sum(~isnan(test_negdata(:, 1)));
+    if (n_pos_nonnans == 0) & (n_neg_nonnans == 0)
+        fprintf(['Beat ', num2str(beat), ' has no features and will be skipped\n'])
+        sortedPeaks(beat, :) = nan;
+        sortedPeaks_d2(beat, :) = nan;
+        sortedPeaks_probs(beat, :) = nan;
+        sortedPeaks_nprobs(beat, :) = nan;
         continue;
     end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -993,9 +1002,10 @@ if options.ndim == 2
     %sortedPeaks = cat(3, sortedPeaks, sortedProms);
 end
 varargout{1} = allmu;
-varargout{2} = sortedPeaks_d2;
-varargout{3} = sortedPeaks_probs;
-varargout{4} = sortedPeaks_nprobs;
+varargout{2} = exp((1./sortedPeaks_nprobs)-1).*sortedPeaks_d2;
+varargout{3} = sortedPeaks_nprobs;
+varargout{4} = sortedPeaks_d2;
+varargout{5} = sortedPeaks_probs;
 %varargout{5} = info;
 %varargout{2} = pos_post_pdf;
 %varargout{3}= pos_gmm;
@@ -1071,8 +1081,15 @@ function [best_locs, best_locs_sign] = find_extremas(template, ax_range, fs, per
         % find the window that has the highest promince
         best_prom_idx = find(prom_avg == max(prom_avg));
         
-        % save the prominence and sequence 
+        % account for cases where there are > 1 sequence with the highest
+        % prominence
+        if length(best_prom_idx) > 1
+            best_prom_idx = best_prom_idx(1);
+        end
+
+        % save the prominence and sequence
         best_prom(seq_len-1) = prom_avg(best_prom_idx);
+
         best_seq{seq_len-1} = best_prom_idx:best_prom_idx+seq_len-1;
     end
 
