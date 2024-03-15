@@ -39,6 +39,10 @@ function [sortedPeaks, varargout] = sortPeaks(scg_beats, fs, options)
 % Notes 
 %       This function will probably NOT work if scg_beats or the training
 %       set provided contains NaNs
+% Reference
+%       Lin, David Jimmy et al. “Real-Time Seismocardiogram Feature Extraction 
+%       Using Adaptive Gaussian Mixture Models.” IEEE journal of biomedical 
+%       and health informatics vol. 27,8 (2023): 3889-3899. doi:10.1109/JBHI.2023.3273989
 % Usage: 
 % find ao points with optiminal cluster searching
 % ao = sortPeaks(scg_beats, fs, 'axrange', [1, 250], 'verbose', false, 'findextrema', true);
@@ -53,7 +57,7 @@ arguments
     options.ncand = 20              % max number of extrema candidates per beat
     
     %%% GMM arguments (default arguments)
-    options.nclusters = 4           % number of clusters (decrease if there are fewer prominent features visually)
+    options.nclusters = 5           % number of clusters (decrease if there are fewer prominent features visually)
     options.ndim = 2                % num dimensions to use for gmm (1: location, 2: prominence)
     options.training = []           % training data provided 
     options.brange = [1, 50]        % beat range for training GMM 
@@ -65,7 +69,7 @@ arguments
     %%% Dijkstra arguments (default arguments)
     options.dijkstra = 1            % use dijkstra 
     options.dijkthresh = 0          % threshold to consider for nodes 
-    options.hweight = 2             % penalty term to avoid identical nodes chosen 
+    options.hweight = 4             % penalty term to avoid identical nodes chosen 
     options.mixd2 = 0          % use a combination of distance and prob for dijk matrix
     
     %%% KF arguments (default arguments)
@@ -78,6 +82,7 @@ arguments
     options.verbose = 1             % display progress updates 
     options.plot = 0                % plot 
     options.ensavg = 0              % preprocessing exponential moving avg of beats  
+    options.perc_lim = 0.14
       
     options.dijkweight = 1          % use dijk altered malhabonis weights  
 end
@@ -153,8 +158,7 @@ else
     % if want to find optimal cluster number 
     if options.findextrema
         template = mean(train_scg, 2);
-        perc_lim = 0.3;
-        [locs_seq, loc_signs] = find_extremas(template, options.axrange, fs, perc_lim, options.plot);
+        [locs_seq, loc_signs] = find_extremas(template, options.axrange, fs, options.perc_lim, options.nclusters, options.plot);
         options.custom = [locs_seq, loc_signs];
         [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
             sliding_nst, sliding_err, fs, 'Closest', 'Axrange', options.axrange, ...
@@ -774,7 +778,9 @@ for beat = 1:size(pos_cand, 1)
         test_extsign = test_extsign(extrema_cand_ord); 
         
         if sum(diff(test_extsign) == 0) > 0
-            disp(['Beat: ', num2str(beat), ' Not alternating pk/valley'])
+            % warning on the found extremas not being alternating peak and
+            % valleys
+            %disp(['Beat: ', num2str(beat), ' Not alternating pk/valley'])
         end
         
         if options.ndim == 2
@@ -1027,11 +1033,11 @@ end
 % Helper Functions
 %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [best_locs, best_locs_sign] = find_extremas(template, ax_range, fs, perc_lim, Plot)
+function [best_locs, best_locs_sign] = find_extremas(template, ax_range, fs, perc_lim, max_clusters, Plot)
 % find the best pk/valley sequence to end up tracking using 
     % get the peaks and valley locations, amplitudes, and prominences 
     
-    ax_range = ax_range*fs/1000;
+    ax_range = round(ax_range*fs/1000);
     ax_range = ax_range(1):ax_range(end);
     [ppks, plocs, ~, pproms] = findpeaks(template(ax_range), 'Annotate','extent');
     [~, nlocs, ~, nproms] = findpeaks(template(ax_range)*-1);
@@ -1075,7 +1081,7 @@ function [best_locs, best_locs_sign] = find_extremas(template, ax_range, fs, per
     end
     
     % checking sequences from 2 to 5 peak/valleys
-    seq_lens = 2:5;
+    seq_lens = 2:max_clusters;
     
     % prominence placeholder and sequence 
     best_prom = zeros(length(seq_lens), 1);
@@ -1160,7 +1166,7 @@ function [pos_cand, varargout] = findAO(scgbeats, num_cand, fs, ao_range, prom_f
     neg_wids = neg_cand;
     
     % dictate a range to find peaks and valleys
-    ao_range = ao_range*fs/1000;
+    ao_range = round(ao_range*fs/1000);
     
     % for each beat
     for beat = 1:size(scgbeats, 2)
