@@ -83,6 +83,7 @@ arguments
     options.plot = 0                % plot 
     options.ensavg = 0              % preprocessing exponential moving avg of beats  
     options.perc_lim = 0.14
+    options.exact = 0               % flag to output kf filtered outputs (useful if you need an exact peak/valley
       
     options.dijkweight = 1          % use dijk altered malhabonis weights  
 end
@@ -476,6 +477,7 @@ end
 
 % this will hold the tracked peak indices for the data provided 
 sortedPeaks = zeros(nbeats, options.nclusters);
+sortedPeaks_exact = zeros(nbeats, options.nclusters);
 sortedPeaks_d2 = zeros(nbeats, options.nclusters);
 sortedPeaks_probs = zeros(nbeats, options.nclusters);
 sortedPeaks_nprobs = zeros(nbeats, options.nclusters);
@@ -974,7 +976,7 @@ for beat = 1:size(pos_cand, 1)
 
      sortedPeaks(beat, :) = stateEst(beat, 1:options.nclusters);
 
-
+     sortedPeaks_exact(beat, :) = peakobs;
     muobs = [reshape(pos_gmm.mu(:, 1), 1, []), reshape(neg_gmm.mu(:, 1), 1, [])];
     muobs = muobs(extrema_gmm_ord);
     allmu(beat, :) = muobs;
@@ -999,6 +1001,11 @@ if options.plot
     plot(sortedPeaks_nprobs); title('Probabilities (against other candidates)')
     linkaxes(ax, 'x')
 
+end
+
+% if you don't want to output the kf filtered outputs 
+if options.exact
+    sortedPeaks = sortedPeaks_exact;
 end
 
 % if there are extrema that exceed the ax looking window
