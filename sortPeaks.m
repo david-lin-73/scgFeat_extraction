@@ -84,7 +84,7 @@ arguments
     options.ensavg = 0              % preprocessing exponential moving avg of beats  
     options.perc_lim = 0.14
     options.exact = 0               % flag to output kf filtered outputs (useful if you need an exact peak/valley
-      
+
     options.dijkweight = 1          % use dijk altered malhabonis weights  
 end
 
@@ -158,9 +158,12 @@ else
     
     % if want to find optimal cluster number 
     if options.findextrema
-        template = mean(train_scg, 2);
+        template = mean(train_scg(:, 1:10), 2);
+        template_imfs = emd(template); 
+        template = template_imfs(:, 1);
         [locs_seq, loc_signs] = find_extremas(template, options.axrange, fs, options.perc_lim, options.nclusters, options.plot);
         options.custom = [locs_seq, loc_signs];
+        disp(options.custom)
         [train_maxlocs, train_minlocs] = general.slideTemplate(train_scg, ...
             sliding_nst, sliding_err, fs, 'Closest', 'Axrange', options.axrange, ...
             'Manual', options.custom);
@@ -1028,6 +1031,7 @@ varargout{2} = exp((1./sortedPeaks_nprobs)-1).*sortedPeaks_d2;
 varargout{3} = sortedPeaks_nprobs;
 varargout{4} = sortedPeaks_d2;
 varargout{5} = sortedPeaks_probs;
+varargout{6} = options.custom;
 %varargout{5} = info;
 %varargout{2} = pos_post_pdf;
 %varargout{3}= pos_gmm;
